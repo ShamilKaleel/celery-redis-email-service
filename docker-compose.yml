@@ -1,0 +1,45 @@
+services:
+  email_server:
+    build: .
+    container_name: email_server
+    ports:
+      - "8000:8000"
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    depends_on:
+      - redis
+    restart: always
+    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+
+  celery_worker:
+    build: .
+    container_name: email_celery_worker
+    environment:
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=0
+    depends_on:
+      - redis
+    restart: always
+    command: uv run celery -A celery_app worker --loglevel=INFO --concurrency=4
+
+  redis:
+    image: redis:alpine
+    container_name: email_redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+    command: ["redis-server", "--appendonly", "yes"]
+    restart: always
+
+volumes:
+  redis_data:
+    name: email_redis_data
