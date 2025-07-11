@@ -3,33 +3,72 @@ services:
     build: .
     container_name: email_server
     ports:
-      - "8000:8000"
+      - "${PORT:-8000}:${PORT:-8000}"
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
+      - DEBUG=${DEBUG:-True}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PORT=${PORT:-8000}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - FLOWER_PORT=${FLOWER_PORT:-5555}
+      - MAX_QUEUE_LENGTH_SINGLE=${MAX_QUEUE_LENGTH_SINGLE:-50}
+      - MAX_QUEUE_LENGTH_BULK=${MAX_QUEUE_LENGTH_BULK:-30}
+      - MAX_BULK_EMAILS=${MAX_BULK_EMAILS:-100}
+    env_file:
+      - .env
     depends_on:
       - redis
     restart: always
-    command: uv run uvicorn main:app --host 0.0.0.0 --port 8000 --reload
+    command: uv run uvicorn main:app --host 0.0.0.0 --port ${PORT:-8000} --reload
 
   celery_worker:
     build: .
     container_name: email_celery_worker
     environment:
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=0
+      - DEBUG=${DEBUG:-True}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - CELERY_WORKER_CONCURRENCY=${CELERY_WORKER_CONCURRENCY:-4}
+      - CELERY_TASK_TIME_LIMIT=${CELERY_TASK_TIME_LIMIT:-300}
+      - CELERY_RESULT_EXPIRES=${CELERY_RESULT_EXPIRES:-3600}
+    env_file:
+      - .env
     depends_on:
       - redis
     restart: always
-    command: uv run celery -A celery_app worker --loglevel=INFO --concurrency=4
+    command: uv run celery -A celery_app worker --loglevel=${LOG_LEVEL:-INFO} --concurrency=${CELERY_WORKER_CONCURRENCY:-4}
+
+  flower:
+    build: .
+    container_name: email_flower_monitor
+    ports:
+      - "${FLOWER_PORT:-5555}:${FLOWER_PORT:-5555}"
+    environment:
+      - REDIS_HOST=${REDIS_HOST:-redis}
+      - REDIS_PORT=${REDIS_PORT:-6379}
+      - REDIS_DB=${REDIS_DB:-0}
+      - FLOWER_PORT=${FLOWER_PORT:-5555}
+      - FLOWER_BASIC_AUTH=${FLOWER_BASIC_AUTH:-admin:admin123}
+    env_file:
+      - .env
+    depends_on:
+      - redis
+      - celery_worker
+    restart: always
+    command: >
+      uv run celery -A celery_app flower
+      --broker=redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}/${REDIS_DB:-0}
+      --port=${FLOWER_PORT:-5555}
+      --basic_auth=${FLOWER_BASIC_AUTH:-admin:admin123}
 
   redis:
     image: redis:alpine
     container_name: email_redis
     ports:
-      - "6379:6379"
+      - "${REDIS_PORT:-6379}:6379"
     volumes:
       - redis_data:/data
     healthcheck:

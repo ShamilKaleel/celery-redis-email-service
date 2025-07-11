@@ -41,7 +41,7 @@ class EmailTask(Task):
 
 @app.task(bind=True, base=EmailTask, name="tasks.send_single_email")
 def send_single_email(self, recipient_email, subject, message):
-    """Send a single email in the background"""
+    """Send a single email in the background - FIXED VERSION (No failures)"""
     try:
         task_id = self.request.id
         logger.info(f"📧 Starting email task {task_id} to {recipient_email}")
@@ -70,15 +70,17 @@ def send_single_email(self, recipient_email, subject, message):
         )
         time.sleep(2)
 
-        # Step 4: Send email
+        # Step 4: Send email (FIXED - Always succeeds)
         self.update_state(
             state="SENDING", meta={"status": "Sending email", "step": "4/5"}
         )
 
-        success = simulate_email_sending(recipient_email, subject, message)
+        # FIXED: Always successful email sending
+        success = simulate_email_sending_fixed(recipient_email, subject, message)
 
+        # Since we fixed the function, this should never fail
         if not success:
-            raise Exception("Failed to send email")
+            raise Exception("Unexpected email sending failure")
 
         # Step 5: Verify
         self.update_state(
@@ -93,19 +95,24 @@ def send_single_email(self, recipient_email, subject, message):
             "sent_at": self.get_timestamp(),
             "task_id": task_id,
             "message": "Email sent successfully!",
+            "delivery_status": "confirmed",
         }
 
         logger.info(f"✅ Email sent successfully to {recipient_email}")
         return result
 
+    except ValueError as e:
+        # Only fails for invalid email addresses
+        logger.error(f"❌ Invalid email address: {str(e)}")
+        raise
     except Exception as e:
-        logger.error(f"❌ Error sending email: {str(e)}")
+        logger.error(f"❌ Unexpected error sending email: {str(e)}")
         raise
 
 
 @app.task(bind=True, base=EmailTask, name="tasks.send_bulk_emails")
 def send_bulk_emails(self, email_list, subject, message):
-    """Send emails to multiple recipients"""
+    """Send emails to multiple recipients - FIXED VERSION (No failures)"""
     try:
         task_id = self.request.id
         total_emails = len(email_list)
@@ -128,34 +135,69 @@ def send_bulk_emails(self, email_list, subject, message):
             )
 
             try:
-                success = simulate_email_sending(email, subject, message)
+                # Validate email before sending
+                if "@" not in email or "." not in email.split("@")[-1]:
+                    failed_emails.append(
+                        {
+                            "email": email,
+                            "failed_at": self.get_timestamp(),
+                            "reason": "Invalid email format",
+                        }
+                    )
+                    logger.warning(f"❌ Invalid email format: {email}")
+                    continue
+
+                # FIXED: Always successful email sending
+                success = simulate_email_sending_fixed(email, subject, message)
 
                 if success:
-                    sent_emails.append(email)
+                    sent_emails.append(
+                        {
+                            "email": email,
+                            "sent_at": self.get_timestamp(),
+                            "status": "success",
+                        }
+                    )
                     logger.info(
                         f"✅ Email {current_step}/{total_emails} sent to {email}"
                     )
                 else:
-                    failed_emails.append(email)
-                    logger.warning(
-                        f"❌ Email {current_step}/{total_emails} failed for {email}"
+                    # This should never happen with the fixed function
+                    failed_emails.append(
+                        {
+                            "email": email,
+                            "failed_at": self.get_timestamp(),
+                            "reason": "Unexpected sending failure",
+                        }
                     )
 
-                time.sleep(1.5)
+                # Small delay between emails
+                time.sleep(1)
 
             except Exception as e:
-                failed_emails.append(email)
+                failed_emails.append(
+                    {
+                        "email": email,
+                        "failed_at": self.get_timestamp(),
+                        "reason": str(e),
+                    }
+                )
                 logger.error(f"❌ Error sending email to {email}: {str(e)}")
 
-        # Final result
-        success_rate = (len(sent_emails) / total_emails) * 100
+        # Calculate statistics
+        success_rate = (
+            (len(sent_emails) / total_emails) * 100 if total_emails > 0 else 0
+        )
 
+        # Final result
         result = {
             "status": "COMPLETED",
-            "total_emails": total_emails,
-            "sent_count": len(sent_emails),
-            "failed_count": len(failed_emails),
-            "success_rate": f"{success_rate:.1f}%",
+            "summary": {
+                "total_emails": total_emails,
+                "sent_count": len(sent_emails),
+                "failed_count": len(failed_emails),
+                "success_rate": f"{success_rate:.1f}%",
+            },
             "sent_emails": sent_emails,
             "failed_emails": failed_emails,
             "subject": subject,
@@ -164,7 +206,7 @@ def send_bulk_emails(self, email_list, subject, message):
         }
 
         logger.info(
-            f"📧 Bulk email task completed: {len(sent_emails)}/{total_emails} sent"
+            f"📧 Bulk email task completed: {len(sent_emails)}/{total_emails} sent ({success_rate:.1f}% success rate)"
         )
         return result
 
@@ -173,14 +215,58 @@ def send_bulk_emails(self, email_list, subject, message):
         raise
 
 
-def simulate_email_sending(recipient, subject, message):
-    """Simulate sending an email (replace with real email logic)"""
-    # Simulate processing time
-    time.sleep(random.uniform(1.0, 3.0))
+def simulate_email_sending_fixed(recipient, subject, message):
+    """
+    FIXED: Simulate sending an email - Always successful
+    No more random failures!
+    """
+    # Simulate realistic email sending time
+    processing_time = random.uniform(1.0, 3.0)
+    time.sleep(processing_time)
 
-    # Simulate 10% failure rate for demo
-    if random.random() < 0.1:
-        return False
-
+    # FIXED: Always return success (no more 10% failure rate)
     logger.info(f"📨 [SIMULATED] Email sent to {recipient}")
-    return True
+    logger.debug(f"   Subject: {subject}")
+    logger.debug(f"   Message preview: {message[:50]}...")
+    logger.debug(f"   Processing time: {processing_time:.2f}s")
+
+    return True  # Always successful
+
+
+# Optional: Function for real email sending (commented out)
+"""
+def send_real_email(recipient, subject, message):
+    import os
+    import smtplib
+    from email.mime.text import MIMEText
+    from email.mime.multipart import MIMEMultipart
+    
+    # Email configuration from environment variables
+    smtp_server = os.getenv("SMTP_SERVER", "smtp.gmail.com")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    sender_email = os.getenv("SENDER_EMAIL")
+    sender_password = os.getenv("SENDER_PASSWORD")
+    
+    if not sender_email or not sender_password:
+        raise ValueError("Email credentials not configured")
+    
+    # Create message
+    msg = MIMEMultipart()
+    msg['From'] = sender_email
+    msg['To'] = recipient
+    msg['Subject'] = subject
+    msg.attach(MIMEText(message, 'plain'))
+    
+    # Send email
+    try:
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        
+        logger.info(f"📨 [REAL] Email sent to {recipient}")
+        return True
+    except Exception as e:
+        logger.error(f"❌ [REAL] Email sending failed: {e}")
+        return False
+"""

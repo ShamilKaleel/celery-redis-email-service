@@ -7,37 +7,39 @@ load_dotenv()
 
 # Redis configuration
 REDIS_HOST = os.getenv("REDIS_HOST", "localhost")
-REDIS_PORT = os.getenv("REDIS_PORT", "6379")
-REDIS_DB = os.getenv("REDIS_DB", "0")
+REDIS_PORT = int(os.getenv("REDIS_PORT", "6379"))
+REDIS_DB = int(os.getenv("REDIS_DB", "0"))
 REDIS_URL = f"redis://{REDIS_HOST}:{REDIS_PORT}/{REDIS_DB}"
+
+# Celery configuration
+CELERY_WORKER_CONCURRENCY = int(os.getenv("CELERY_WORKER_CONCURRENCY", "4"))
+CELERY_TASK_TIME_LIMIT = int(os.getenv("CELERY_TASK_TIME_LIMIT", "300"))
+CELERY_RESULT_EXPIRES = int(os.getenv("CELERY_RESULT_EXPIRES", "3600"))
 
 print(f"🔗 Connecting to Redis: {REDIS_URL}")
 
-# Initialize Celery app with explicit backend configuration
+# Initialize Celery app
 app = Celery("email_app")
 
 # Configure Celery
 app.conf.update(
-    # Broker and Backend
     broker_url=REDIS_URL,
     result_backend=REDIS_URL,
-    # Task settings
-    result_expires=60 * 60,  # 1 hour
-    task_track_started=True,
+    result_expires=CELERY_RESULT_EXPIRES,
     task_serializer="json",
-    accept_content=["json"],
     result_serializer="json",
+    accept_content=["json"],
     result_accept_content=["json"],
+    task_track_started=True,
+    task_send_sent_event=True,
+    worker_send_task_events=True,
     timezone="UTC",
     enable_utc=True,
-    # Worker settings
-    worker_concurrency=4,
+    worker_concurrency=CELERY_WORKER_CONCURRENCY,
     worker_prefetch_multiplier=1,
-    task_time_limit=300,  # 5 minutes
-    task_soft_time_limit=240,  # 4 minutes
-    # Include tasks
+    task_time_limit=CELERY_TASK_TIME_LIMIT,
+    task_soft_time_limit=CELERY_TASK_TIME_LIMIT - 60,
     include=["tasks"],
-    # Ensure backend is enabled
     task_ignore_result=False,
     task_store_eager_result=True,
 )

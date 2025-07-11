@@ -12,4 +12,5 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "email-validator>=2.1.0",
     "pydantic[email]>=2.5.0",
+    "flower>=2.0.1",
 ]

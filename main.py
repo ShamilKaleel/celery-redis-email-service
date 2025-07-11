@@ -1,21 +1,34 @@
 import logging
+import os
 from typing import List, Optional
 import uvicorn
 from fastapi import FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, EmailStr
+from dotenv import load_dotenv
 
 from celery_app import get_queue_length, app as celery_app
 from tasks import send_single_email, send_bulk_emails
 
+load_dotenv()
+
+# Configuration
+DEBUG = os.getenv("DEBUG", "True").lower() == "true"
+LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+PORT = int(os.getenv("PORT", "8000"))
+MAX_QUEUE_LENGTH_SINGLE = int(os.getenv("MAX_QUEUE_LENGTH_SINGLE", "50"))
+MAX_QUEUE_LENGTH_BULK = int(os.getenv("MAX_QUEUE_LENGTH_BULK", "30"))
+MAX_BULK_EMAILS = int(os.getenv("MAX_BULK_EMAILS", "100"))
+FLOWER_PORT = os.getenv("FLOWER_PORT", "5555")
+
 # Setup logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=getattr(logging, LOG_LEVEL.upper(), logging.INFO))
 logger = logging.getLogger("email_app")
 
 app = FastAPI(
-    title="Email Service API",
-    description="Send emails in the background using Celery + Redis with UV",
+    title="📧 Email Service API",
+    description="Send emails in the background using Celery + Redis + Flower with UV",
     version="0.1.0",
 )
 
@@ -54,7 +67,7 @@ class TaskStatusResponse(BaseModel):
 def read_root():
     return {
         "message": "📧 Email Service API is running with UV!",
-        "python_manager": "UV (Ultra-fast Python package manager)",
+        "flower_dashboard": f"http://localhost:{FLOWER_PORT}",
         "endpoints": {
             "send_email": "POST /send-email",
             "send_bulk": "POST /send-bulk-emails",
@@ -65,7 +78,7 @@ def read_root():
             "web_framework": "FastAPI",
             "task_queue": "Celery",
             "message_broker": "Redis",
-            "package_manager": "UV",
+            "monitoring": "Flower",
         },
     }
 
@@ -74,10 +87,12 @@ def read_root():
 def get_queue_status():
     """Check how many tasks are in the queue"""
     queue_length = get_queue_length()
+    status = "healthy" if queue_length < MAX_QUEUE_LENGTH_SINGLE else "busy"
+
     return {
         "queue_length": queue_length,
         "message": f"There are {queue_length} tasks waiting in the queue",
-        "status": "healthy" if queue_length < 50 else "busy",
+        "status": status,
     }
 
 
@@ -85,11 +100,9 @@ def get_queue_status():
 def send_email_endpoint(request: SingleEmailRequest) -> JSONResponse:
     """Send a single email in the background"""
     try:
-        # Check queue capacity
-        MAX_QUEUE_LENGTH = 50
         current_queue_length = get_queue_length()
 
-        if current_queue_length >= MAX_QUEUE_LENGTH:
+        if current_queue_length >= MAX_QUEUE_LENGTH_SINGLE:
             return JSONResponse(
                 content={
                     "error": "Email queue is full. Please try again later.",
@@ -98,7 +111,6 @@ def send_email_endpoint(request: SingleEmailRequest) -> JSONResponse:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Start background email task
         task = send_single_email.delay(
             request.recipient_email, request.subject, request.message
         )
@@ -112,6 +124,7 @@ def send_email_endpoint(request: SingleEmailRequest) -> JSONResponse:
                 "message": f"Email to {request.recipient_email} is being sent in background",
                 "recipient": request.recipient_email,
                 "subject": request.subject,
+                "flower_url": f"http://localhost:{FLOWER_PORT}/task/{task.id}",
             }
         )
 
@@ -133,17 +146,15 @@ def send_bulk_emails_endpoint(request: BulkEmailRequest) -> JSONResponse:
                 detail="Email list cannot be empty",
             )
 
-        if len(request.email_list) > 100:
+        if len(request.email_list) > MAX_BULK_EMAILS:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Cannot send more than 100 emails at once",
+                detail=f"Cannot send more than {MAX_BULK_EMAILS} emails at once",
             )
 
-        # Check queue capacity
-        MAX_QUEUE_LENGTH = 30
         current_queue_length = get_queue_length()
 
-        if current_queue_length >= MAX_QUEUE_LENGTH:
+        if current_queue_length >= MAX_QUEUE_LENGTH_BULK:
             return JSONResponse(
                 content={
                     "error": "Email queue is full. Please try again later.",
@@ -152,7 +163,6 @@ def send_bulk_emails_endpoint(request: BulkEmailRequest) -> JSONResponse:
                 status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             )
 
-        # Start background bulk email task
         task = send_bulk_emails.delay(
             request.email_list, request.subject, request.message
         )
@@ -168,6 +178,7 @@ def send_bulk_emails_endpoint(request: BulkEmailRequest) -> JSONResponse:
                 "message": f"Bulk email to {len(request.email_list)} recipients is being sent in background",
                 "recipient_count": len(request.email_list),
                 "subject": request.subject,
+                "flower_url": f"http://localhost:{FLOWER_PORT}/task/{task.id}",
             }
         )
 
@@ -185,7 +196,6 @@ def send_bulk_emails_endpoint(request: BulkEmailRequest) -> JSONResponse:
 def get_task_status(task_id: str) -> JSONResponse:
     """Check the status of an email task"""
     try:
-        # Use the specific celery app instance to get task result
         task_result = celery_app.AsyncResult(task_id)
 
         response_data = {
@@ -214,4 +224,4 @@ def get_task_status(task_id: str) -> JSONResponse:
 
 
 if __name__ == "__main__":
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=PORT, reload=True)
